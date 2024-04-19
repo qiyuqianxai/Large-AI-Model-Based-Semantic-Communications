@@ -12,9 +12,9 @@ class base_net(nn.Module):
 
     def forward(self,x):
         s_code = self.isc_model(x)
-        c_code,c_code_with_n, x = self.ch_model(s_code)
-        decoding = self.isc_model(latent = x)
-        return c_code,c_code_with_n,decoding
+        c_code, c_code_, s_code_ = self.ch_model(s_code)
+        im_decoding = self.isc_model(latent = s_code_)
+        return c_code, c_code_, s_code, s_code_, im_decoding
 
 if __name__ == '__main__':
     SC_model = SCNet()

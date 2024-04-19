@@ -77,13 +77,11 @@ def train_SCNet(model, train_dataloader, arg:params):
     muInfoNet = MutualInfoSystem()
     muInfoNet.load_state_dict(torch.load(os.path.join(arg.checkpoint_path,"MI.pth"), map_location="cpu"))
     muInfoNet.to(arg.device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=arg.lr,
+    optimizer_SC = torch.optim.Adam(model.isc_model.parameters(), lr=arg.lr,
                                              weight_decay=arg.weight_delay)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
-                                                                      factor=0.1, patience=100,
-                                                                      verbose=True, threshold=0.0001,
-                                                                      threshold_mode='rel',
-                                                                      cooldown=0, min_lr=0, eps=1e-08)
+    optimizer_Ch = torch.optim.Adam(model.Ch_model.parameters(), lr=arg.lr,
+                                             weight_decay=arg.weight_delay)
+
     # define loss function
     mse = nn.MSELoss()
     model.train()
@@ -91,30 +89,39 @@ def train_SCNet(model, train_dataloader, arg:params):
     for epoch in range(arg.epoch):
         start = time.time()
         losses = []
+        # training channel model
         for i, (x, y) in enumerate(train_dataloader):
-            optimizer.zero_grad()
+            optimizer_Ch.zero_grad()
             x = x.to(arg.device)
-            encoding,encoding_with_noise,decoding = model(x)
-            # compute MI loss
-            batch_joint = sample_batch(1, 'joint', encoding, encoding_with_noise).to(arg.device)
-            batch_marginal = sample_batch(1, 'marginal', encoding, encoding_with_noise).to(arg.device)
+            c_code, c_code_, s_code, s_code_, im_decoding = model(x)
+            loss_ch = mse(s_code,s_code_)
+            loss_ch.backward()
+            optimizer_Ch.step()
+            losses.append(loss_ch.item())
+        # training SC model
+        for i, (x, y) in enumerate(train_dataloader):
+            optimizer_SC.zero_grad()
+            x = x.to(arg.device)
+            c_code, c_code_, s_code, s_code_, im_decoding = model(x)
+            # Optional: use MI to maximize the achieved data rate during training.
+            batch_joint = sample_batch(1, 'joint', c_code, c_code_).to(arg.device)
+            batch_marginal = sample_batch(1, 'marginal', c_code, c_code_).to(arg.device)
             t = muInfoNet(batch_joint)
             et = torch.exp(muInfoNet(batch_marginal))
-            loss_MI = torch.mean(t) - torch.log(torch.mean(et)) # or use mse(encoding,encoding_with_noise) for simplicity
+            loss_MI = torch.mean(t) - torch.log(torch.mean(et))
             # compute SC loss
-            loss_SC = mse(decoding,x)
-            loss = loss_MI + loss_SC
-            loss.backward()
-            optimizer.step()
-            scheduler.step(loss)
-            losses.append(loss.item())
+            loss_SC = mse(im_decoding,x)
+            loss_SC = loss_MI + loss_SC
+            loss_SC.backward()
+            optimizer_SC.step()
+            losses.append(loss_SC.item())
         losses = np.mean(losses)
         loss_record.append(losses)
-        print(f"epoch {epoch} | MI loss: {loss_MI.item()} | SC loss: {loss_SC.item()} | total loss: {loss.item()} | waste time: {time.time() - start}")
+        print(f"epoch {epoch} | loss: {losses} | waste time: {time.time() - start}")
         if epoch%5==0:
             os.makedirs(os.path.join(arg.log_path, f"{arg.snr}"),exist_ok=True)
             show_images(x.detach().cpu(), os.path.join(arg.log_path, f"{arg.snr}",f"{arg.save_model_name}_imgs.jpg"))
-            show_images(decoding.detach().cpu(), os.path.join(arg.log_path, f"{arg.snr}",f"{arg.save_model_name}_rec_imgs.jpg"))
+            show_images(im_decoding.detach().cpu(), os.path.join(arg.log_path, f"{arg.snr}",f"{arg.save_model_name}_rec_imgs.jpg"))
         with open(os.path.join(arg.log_path,f"{arg.save_model_name}_snr{arg.snr}_loss.json"),"w",encoding="utf-8")as f:
             f.write(json.dumps(loss_record,indent=4,ensure_ascii=False))
         torch.save(model.state_dict(), weights_path)
@@ -149,17 +156,17 @@ def train_MASKNet(model, train_dataloader, arg:params):
         for i, (x, y) in enumerate(train_dataloader):
             model.zero_grad()
             x = x.to(arg.device)
-            encoding, encoding_with_noise, decoding = model(x)
-            # compute MI loss
-            batch_joint = sample_batch(5, 'joint', encoding, encoding_with_noise).to(arg.device)
-            batch_marginal = sample_batch(5, 'marginal', encoding, encoding_with_noise).to(arg.device)
-
+            c_code, c_code_, s_code, s_code_, im_decoding = model(x)
+            loss_ch = mse(s_code, s_code_)
+            # Optional: use MI to maximize the achieved data rate during training.
+            batch_joint = sample_batch(1, 'joint', c_code, c_code_).to(arg.device)
+            batch_marginal = sample_batch(1, 'marginal', c_code, c_code_).to(arg.device)
             t = muInfoNet(batch_joint)
             et = torch.exp(muInfoNet(batch_marginal))
             loss_MI = torch.mean(t) - torch.log(torch.mean(et))
             # compute SC loss
-            loss_SC = mse(decoding, x)
-            loss = loss_MI + loss_SC
+            loss_SC = mse(im_decoding, x)
+            loss = loss_MI + loss_SC + loss_ch
             loss.backward()
             optimizer.step()
             scheduler.step(loss)
@@ -167,11 +174,11 @@ def train_MASKNet(model, train_dataloader, arg:params):
         losses = np.mean(losses)
         loss_record.append(losses)
         print(
-            f"epoch {epoch} | MI loss: {loss_MI.item()} | Rec loss: {loss_SC.item()} | total loss: {loss.item()} | waste time: {time.time() - start}")
+            f"epoch {epoch} | loss: {loss.item()} | waste time: {time.time() - start}")
         if epoch % 5 == 0:
             os.makedirs(os.path.join(arg.log_path, f"{arg.snr}"), exist_ok=True)
             show_images(x.detach().cpu(), os.path.join(arg.log_path, f"{arg.snr}", f"{arg.save_model_name}_imgs.jpg"))
-            show_images(decoding.detach().cpu(), os.path.join(arg.log_path, f"{arg.snr}", f"{arg.save_model_name}_rec_imgs.jpg"))
+            show_images(im_decoding.detach().cpu(), os.path.join(arg.log_path, f"{arg.snr}", f"{arg.save_model_name}_rec_imgs.jpg"))
         with open(os.path.join(arg.log_path, f"{arg.save_model_name}_snr{arg.snr}_loss.json"), "w", encoding="utf-8") as f:
             f.write(json.dumps(loss_record, indent=4, ensure_ascii=False))
         weights_path = os.path.join(arg.checkpoint_path, f"{arg.save_model_name}_snr{arg.snr}.pth")
