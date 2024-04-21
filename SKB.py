@@ -99,8 +99,8 @@ def SKB_with_auto(image_path):
     for i,mask in enumerate(masks):
         show_interesting_object(mask['segmentation'], image, plt.gca())
         plt.axis('off')
-        plt.savefig(f"{image_path.replace('.jpg',str(i))}.png", bbox_inches='tight', pad_inches=0)
-        plt.show()
+        plt.savefig(f"{image_path.replace('.jpg','').replace('.png','')}/{str(i).zfill(4)}.jpg", bbox_inches='tight', pad_inches=0)
+        # plt.show()
 
 if __name__ == '__main__':
     sam_checkpoint = "sam_vit_h_4b8939.pth"

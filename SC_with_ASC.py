@@ -184,10 +184,29 @@ def train_MASKNet(model, train_dataloader, arg:params):
         weights_path = os.path.join(arg.checkpoint_path, f"{arg.save_model_name}_snr{arg.snr}.pth")
         torch.save(model.state_dict(), weights_path)
 
+@torch.no_grad()
+def data_transmission(img_path):
+    Img_data = dset.ImageFolder(root=img_path)
+    datasets = custom_datasets(Img_data)
+    dataloader = DataLoader(dataset=datasets, batch_size=1, shuffle=False, num_workers=0,
+                                  drop_last=False)
+    # training SCNet
+    SC_model = SCNet(input_dim=3, ASC=False)
+    channel_model = channel_net(in_dims=5408, snr=arg.snr)
+    model = base_net(SC_model, channel_model)
+    weights_path = os.path.join(arg.checkpoint_path, f"{arg.save_model_name}_snr{arg.snr}.pth")
+    weight = torch.load(weights_path,map_location="cpu")
+    model.load_state_dict(weight)
+    model.to(arg.device)
+    model.eval()
+    for i, (x, y) in enumerate(train_dataloader):
+        c_code, c_code_, s_code, s_code_, im_decoding = model(x)
+        show_images(im_decoding.cpu(),f"rec_img_{i}.jpg")
 
+arg = params()
 if __name__ == '__main__':
     same_seeds(1024)
-    arg = params()
+
     Img_data = dset.ImageFolder(root=arg.dataset)
     datasets = custom_datasets(Img_data)
     train_dataloader = DataLoader(dataset=datasets, batch_size=arg.batchsize, shuffle=True, num_workers=0,
